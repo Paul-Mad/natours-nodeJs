@@ -12,6 +12,32 @@ const singToken = (id) =>
     expiresIn: process.env.JWT_EXPIRES_IN,
   });
 
+const createSendToken = (user, statusCode, res) => {
+  const token = singToken(user._id);
+  const cookieOptions = {
+    expires: new Date(
+      Date.now() + process.env.JWT_COOKIE_EXPIRES_IN * 60 * 60 * 1000
+    ),
+    httpOnly: true,
+  };
+  //set secure cookie when in production
+  if (process.env.NODE_ENV === 'production') cookieOptions.secure = true;
+
+  //remove password from the response body
+  user.password = undefined;
+
+  //create a cookie and send the token with some security parameters
+  res.cookie('jwt', token, cookieOptions);
+
+  res.status(statusCode).json({
+    status: 'success',
+    token,
+    data: {
+      user,
+    },
+  });
+};
+
 //::::: SIGN UP USER :::::
 exports.signup = catchAsync(async (req, res, next) => {
   const newUser = await User.create({
@@ -21,21 +47,13 @@ exports.signup = catchAsync(async (req, res, next) => {
     passwordConfirm: req.body.passwordConfirm,
   });
 
-  const token = singToken(newUser._id);
-
-  res.status(201).json({
-    status: 'success',
-    token,
-    data: {
-      user: newUser,
-    },
-  });
+  createSendToken(newUser, 201, res);
 });
 
 //::::: LOGIN USER  :::::
 exports.login = catchAsync(async (req, res, next) => {
   const { email, password } = req.body;
-
+  console.log(password);
   // 1) Check if email and password exist
   if (!email || !password) {
     return next(new AppError('Please provide email and password!', 400));
@@ -46,15 +64,11 @@ exports.login = catchAsync(async (req, res, next) => {
   const isPwdCorrect = await user.correctPassword(password, user.password);
 
   if (!user || !isPwdCorrect) {
-    return next(new AppError('Incorrect email or password', 401));
+    return next(new AppError('Incorrect email or password!!', 401));
   }
 
   // 3) If everything ok, send token back to the client
-  const token = singToken(user._id);
-  res.status(200).json({
-    status: 'success',
-    token,
-  });
+  createSendToken(user, 200, res);
 });
 
 //:::::HIGH ORDER FUNCTION to protect authorized access ---- IMPORTANT! :::::
@@ -150,15 +164,16 @@ exports.forgotPassword = catchAsync(async (req, res, next) => {
   }
 });
 
+//::::: RESET PASSWORD   :::::
 exports.resetPassword = catchAsync(async (req, res, next) => {
-  // 1) Ger user baser on the token
-  const hashedTOken = crypto
+  // 1) Ger user based on the token
+  const hashedToken = crypto
     .createHash('sha256')
     .update(req.params.token)
     .digest('hex');
 
   const user = await User.findOne({
-    passwordResetToken: hashedTOken,
+    passwordResetToken: hashedToken,
     passwordResetExpires: { $gt: Date.now() },
   });
   // 2) It token has not expired, and there is no user, set the new password
@@ -173,9 +188,29 @@ exports.resetPassword = catchAsync(async (req, res, next) => {
 
   // 3) Update changedPasswordAt property fot the user
   // 4) Log the in, send JWT
-  const token = singToken(user._id);
-  res.status(200).json({
-    status: 'success',
-    token,
-  });
+  createSendToken(user, 200, res);
+});
+
+//::::: UPDATE PASSWORD   :::::
+exports.updatePassword = catchAsync(async (req, res, next) => {
+  // 1) Get the user from the collection
+  const user = await User.findById(req.user.id).select('+password');
+
+  // 2) Check if POST password is correct
+  const isPwdCorrect = await user.correctPassword(
+    req.body.passwordCurrent,
+    user.password
+  );
+
+  // 3) If so, update password
+  if (!isPwdCorrect)
+    return next(new AppError('Current password is wrong!', 401));
+
+  user.password = req.body.password;
+  user.passwordConfirm = req.body.passwordConfirm;
+  await user.save();
+  // User.findByIdAndUpdate() will not work with middlewares and validators
+
+  // 4) Log user in, send JWT
+  createSendToken(user, 200, res);
 });

@@ -40,8 +40,14 @@ const userSchema = new mongoose.Schema({
   passwordChangedAt: Date,
   passwordResetToken: String,
   passwordResetExpires: Date,
+  active: {
+    type: Boolean,
+    default: true,
+    select: false,
+  },
 });
 
+// Encrypt the password before save()
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next(); // if the password is not modified then go to next middleware
 
@@ -52,11 +58,17 @@ userSchema.pre('save', async function (next) {
   next();
 });
 
+//Verify if the password has changed or the document is new
 userSchema.pre('save', function (next) {
-  //Verify if the password has changed or the document is new
   if (!this.isModified('password') || this.isNew) return next();
-
   this.passwordChangedAt = Date.now() - 1000;
+  next();
+});
+
+//selects only active users (query middleware)
+userSchema.pre(/^find/, function (next) {
+  //this points to the current query
+  this.find({ active: { $ne: false } });
   next();
 });
 
